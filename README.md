@@ -90,8 +90,9 @@ them useful for handling bug reports.
 Some important things to remember when reporting bugs:
 
 * **Paste the full text of the command that triggered the error, along with any
-  error messages printed to the console** (and relevant sections of the klipper
-  logs if appropriate).
+  error messages printed to the console** and relevant sections of the klipper
+  logs if appropriate (and please [format this text as code](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#quoting-code),
+  otherwise Github will format it like a ransom note).
 * **Attach your config to the bug report.** There's generally no way to diagnose
   anything without the configs.
 * **Verify that your issue reproduces on the current, stock installation of
@@ -227,6 +228,7 @@ filename: ~/printer_data/variables.cfg # UPDATE THIS FOR YOUR PATH!!!
 
 [virtual_sdcard]
 path: ~/gcode_files # UPDATE THIS FOR YOUR PATH!!!
+on_error_gcode: CANCEL_PRINT
 
 [display_status]
 ```
@@ -242,13 +244,33 @@ into the relevant sections.
 #### Start G-code
 
 ```
-M190 S0
-M109 S0
-PRINT_START EXTRUDER={first_layer_temperature[initial_tool]} BED=[first_layer_bed_temperature] MESH_MIN={first_layer_print_min[0]},{first_layer_print_min[1]} MESH_MAX={first_layer_print_max[0]},{first_layer_print_max[1]} LAYERS={total_layer_count} NOZZLE_SIZE={nozzle_diameter[0]}
+M190 S0 ; Remove this if autoemit_temperature_commands is off in Prusa Slicer 2.6 and later
+M109 S0 ; Remove this if autoemit_temperature_commands is off in Prusa Slicer 2.6 and later
+_PRINT_START_PHASE_INIT EXTRUDER={first_layer_temperature[initial_tool]} BED=[first_layer_bed_temperature] MESH_MIN={first_layer_print_min[0]},{first_layer_print_min[1]} MESH_MAX={first_layer_print_max[0]},{first_layer_print_max[1]} LAYERS={total_layer_count} NOZZLE_SIZE={nozzle_diameter[0]}
+; Insert custom gcode here.
+_PRINT_START_PHASE_PREHEAT
+; Insert custom gcode here.
+_PRINT_START_PHASE_PROBING
+; Insert custom gcode here.
+_PRINT_START_PHASE_EXTRUDER
+; Insert custom gcode here.
+_PRINT_START_PHASE_PURGE
 
 ; This is the place to put slicer purge lines if you haven't set a non-zero
-; variable_start_purge_length to have START_PRINT automatically purge (e.g. if
-; using a Mosaic Palette, which requires the slicer to generate the purge).
+; variable_start_purge_length to have START_PRINT automatically calculate and 
+; perform the purge (e.g. if using a Mosaic Palette, which requires the slicer
+; to generate the purge).
+```
+
+#### Additional SuperSlicer Start G-code
+
+If you're using SuperSlicer you can add the following immediately before the
+`PRINT_START` line from above. This will perform some added bounds checking and
+will allow you to use the random print relocation feature without requiring
+`exclude_object` entries in the print file.
+
+```
+PRINT_START_SET MODEL_MIN={bounding_box[0]},{bounding_box[1]} MODEL_MAX={bounding_box[3]},{bounding_box[4]}
 ```
 
 #### End G-code
@@ -306,11 +328,20 @@ configuration steps listed below.
 ```
 M190 S0
 M109 S0
-PRINT_START EXTRUDER={material_print_temperature_layer_0} BED={material_bed_temperature_layer_0} NOZZLE_SIZE={machine_nozzle_size}
+_PRINT_START_PHASE_INIT EXTRUDER={material_print_temperature_layer_0} BED={material_bed_temperature_layer_0} NOZZLE_SIZE={machine_nozzle_size}
+; Insert custom gcode here.
+_PRINT_START_PHASE_PREHEAT
+; Insert custom gcode here.
+_PRINT_START_PHASE_PROBING
+; Insert custom gcode here.
+_PRINT_START_PHASE_EXTRUDER
+; Insert custom gcode here.
+_PRINT_START_PHASE_PURGE
 
 ; This is the place to put slicer purge lines if you haven't set a non-zero
-; variable_start_purge_length to have START_PRINT automatically purge (e.g. if
-; using a Mosaic Palette, which requires the slicer to generate the purge).
+; variable_start_purge_length to have START_PRINT automatically calculate and 
+; perform the purge (e.g. if using a Mosaic Palette, which requires the slicer
+; to generate the purge).
 ```
 
 #### End G-code
@@ -367,7 +398,7 @@ managed_services: klipper
 
 > **Note:** I'd advise against adding the auto-update entries to Moonraker until
 > you have everything working well, because it can make uninstallation a bit
-> harder due to how Moonraker's autoupdate behavior.
+> harder due to Moonraker's autoupdate behavior.
 
 ## Removal
 
@@ -421,9 +452,11 @@ are listed in [globals.cfg](globals.cfg#L5).
 `BED_MESH_CALIBRATE_FAST`
 
 Wraps the Klipper `BED_MESH_CALIBRATE` command to scale and redistribute the
-probe points so that only the appropriate area in `MESH_MIN` and `MESH_MAX` is probed. This can dramatically reduce probing times for anything that doesn't
-fill the first layer of the bed. `PRINT_START` will automatically use this for
-bed mesh calibration if a `[bed_mesh]` section is detected in your config.
+probe points so that only the appropriate area in `MESH_MIN` and `MESH_MAX` is
+probed. This can dramatically reduce probing times for anything that doesn't
+fill the first layer of the bed. If the `MESH_MIN` and `MESH_MAX` arguments
+are provided to `PRINT_START` it will automatically use this for bed mesh
+calibration (so long as a `[bed_mesh]` section is detected in your config).
 
 The following additional configuration options are available from
 [globals.cfg](globals.cfg#L5).
@@ -437,16 +470,25 @@ The following additional configuration options are available from
 
 > **Note:** See the [optional section](#bed-mesh) for additional macros.
 
-> **Note:** The bed mesh optimizations are silently disabled for delta printers
-  and when the mesh parameters include a [`RELATIVE_REFERENCE_INDEX`
-  ](https://www.klipper3d.org/Bed_Mesh.html#the-relative-reference-index)
-  (which is icnompatible with dynamic mesh generation).
+> **Note:** The bed mesh optimizations are silently disabled for delta printers.
+
+> **Note:** If the `bed_mesh` config includes a [`relative_reference_index`
+  ](https://www.klipper3d.org/Bed_Mesh.html#the-relative-reference-index) then
+  the index point selected in the optimized mesh will be the point closest to
+  the index point in the mesh from the config. However, if a
+  `RELATIVE_REFERENCE_INDEX` parameter is supplied directly to this macro it
+  will be used unmodified.
 
 `BED_MESH_CHECK`
 
-Checks the `[bed_mesh]` config and warns if `mesh_min` or `mesh_max` could allow
-a move out of range during `BED_MESH_CALIBRATE`. This is run implictily at
-Klipper startup and at the start of `BED_MESH_CALIBRATE`.
+* `ABORT` - Set to a non-zero value to abort macro processing on an error.
+* `MESH_MIN` - See Klipper documentation for `BED_MESH_CALIBRATE`.
+* `MESH_MAX` - See Klipper documentation for `BED_MESH_CALIBRATE`.
+
+Checks the `[bed_mesh]` config and optionally supplied parameters. Will warn
+(or optionally abort) if `mesh_min` or `mesh_max` could allow a move out of
+range during `BED_MESH_CALIBRATE`. This is run implictily at Klipper startup
+and as part of `BED_MESH_CALIBRATE_FAST`.
 
 ### Bed Surface
 
@@ -457,6 +499,39 @@ Corresponding LCD menus for sheet selection and babystepping will be added to
 *Setup* and *Tune* if [`lcd_menus.cfg`](#lcd-menus) is included. Any Z offset
 adjustments made in the LCD menus, console, or other clients (e.g. Mainsail,
 Fluidd) will be applied to the current sheet and persisted across restarts.
+
+#### `ADJUST_SURFACE_OFFSETS`
+
+Adjusts surface offsets to account for changes in the Z endstop position or
+probe Z offset. A message to invoke this command will be shown in the console
+when a relevant change is made to `printer.cfg`.
+
+* `IGNORE` - Set to 1 to reset the saved offsets without adjusting the surfaces.
+
+#### `LOAD_SURFACE_MESH`
+
+Attempts to load a mesh associated with the specified surface.
+
+* `SURFACE` *(default: current surface)* - Bed surface.
+
+#### `MAKE_SURFACE_MESH`
+
+Generates a mesh associated with the specified surface. If
+`variable_start_try_saved_surface_mesh` is true then `START_PRINT` will load
+this mesh when the surface is selected (and skip the mesh leveling step if it
+was specified).
+
+* `BED` - *(default: 70)* Bed temperature when probing the bed.
+* `EXTRUDER` - *(default: `variable_start_extruder_probing_temp`)* Extruder
+  temperature when probing the bed.
+* `SURFACE` *(default: current surface)* - Bed surface.
+* `MESH_MULTIPLIER` *(default: 2)* - Increases the mesh density by the specified
+  integer value while preserving the existing mesh points and relative reference
+  index. A value of `1` leaves the mesh unmodified, `2` doubles the density, `3`
+  triples it, etc. (I.e. if `bed_mesh` specifies `probe_count: 5,5` and
+  `MESH_MULTIPLIER=2` then this macro will generate a 9x9 grid, whereas
+  `MESH_MULTIPLIER=3` will generate a 13x13 grid.)
+* *See Klipper `BED_MESH_CALIBRATE` documentation for additional arguments.*
 
 #### `SET_SURFACE_ACTIVE`
 
@@ -479,14 +554,6 @@ argument for `OFFSET` is provided the current offset is displayed.
 > **Note:** The `SET_GCODE_OFFSET` macro is overridden to update the
 > offset for the active surface. This makes the bed surface work with Z offset
 > adjustments made via any interface or client.
-
-#### `ADJUST_SURFACE_OFFSETS`
-
-Adjusts surface offsets to account for changes in the Z endstop position or
-probe Z offset. A message to invoke this command will be shown in the console
-when a relevant change is made to `printer.cfg`.
-
-* `IGNORE` - Set to 1 to reset the saved offsets without adjusting the surfaces.
 
 ### Beep
 
@@ -679,13 +746,20 @@ when the `O` argument is included (equivalent to the same argument in Marlin).
 See Klipper `G28` documentation for general information and detail on the other
 arguments.
 
-* `O` - Omits axes from the homing procedure if they are already homed.
+* `O` - Omits already homed axes from the homing procedure.
 
 > **Note:** If you have a `[homing_override]` section you will need to update
 > any `G28` commands in the gcode part to use `G28.6245197` instead (which is
 > the renamed version of Klipper's built-in `G28`). Failure to do this will
 > cause `G28` commands to error out with the message ***Macro G28 called
 > recursively***.
+
+#### `LAZY_HOME`
+
+Homes the specified axes; by default omits any axes that are already homed.
+
+* `AXES` *(default: XYZ)* - List of axes to home.
+* `LAZY` *(default: 1)* - Omits already homed axes from the homing procedure.
 
 ### Layer Triggers
 
@@ -836,9 +910,11 @@ These are the customization options you can add to your
   smaller or thinner beds you may want to reduce this value or disable it
   entirely by setting it to `0.0`.
 
-* `variable_start_end_park_y` *(default: `print_max` Y coordinate)* - The final
-  Y position of the toolhead in the `PRINT_END` macro, to ensure that the
-  toolhead is out of the way when the bed is presented for print removal.
+* `variable_start_end_park_y` *(default: `max`)* - The final Y position of the
+  toolhead in the `PRINT_END` macro, to ensure that the toolhead is out of the
+  way when the bed is presented for print removal. This can be set to a Y
+  coordinate (e.g. `0.0`), `max` to use `stepper_y.position_max`, or `min` to
+  use `stepper_y.position_min`.
 
 * `variable_start_extruder_preheat_scale` *(default: 0.5)* - This value is
   multiplied by the target extruder temperature and the result is used as the
@@ -854,14 +930,6 @@ These are the customization options you can add to your
   probing that use the nozzle directly. When this value is provided
   `variable_start_extruder_preheat_scale` is ignored.
 
-* `variable_start_gcode_before_print` *(default: None)* - Optional user-supplied
-  gcode run after any leveling operations are complete and the bed, extruder,
-  and chamber are all stabilized at their target temperatures. Immediately after
-  this gcode executes the purge line will be printed (if specified) and then the
-  file from the virtual sdcard will begin printing. This is a useful to add any
-  probe docking commands, loading from a multi-material unit, or other
-  operations that must occur before any filament is extruded.
-
 * `variable_start_level_bed_at_temp` *(default: True if `bed_mesh` configured
   )* - If true the `PRINT_START` macro will run [`BED_MESH_CALIBRATE_FAST`](
   #bed-mesh-improvements) after the bed has stabilized at its target
@@ -875,7 +943,7 @@ These are the customization options you can add to your
   adjustments after the print completes or is cancelled (e.g. feedrate,
   flow percentage).
 
-* `variable_start_purge_clearance` *(default: 5.0)* Distance (in millimeters)
+* `variable_start_purge_clearance` *(default: 5.0)* - Distance (in millimeters)
   between the purge lines and the print area (if a `start_purge_length` is
   provided).
 
@@ -883,12 +951,33 @@ These are the customization options you can add to your
   millimeters) to purge after the extruder finishes heating and prior to
   starting the print. For most setups `30` is a good starting point.
 
-* `variable_start_purge_prime_length` *(default: 10.0)* Length of filament (in
+* `variable_start_purge_prime_length` *(default: 10.0)* - Length of filament (in
   millimeters) to prime the extruder before drawing the purge lines.
 
 * `variable_start_quad_gantry_level_at_temp` *(default: True if
   `quad_gantry_level` configured)* - If true the `PRINT_START` macro will run
   `QUAD_GANTRY_LEVEL` after the bed has stabilized at its target temperature.
+
+* `variable_start_random_placement_max` *(default: 0)* - A positive value
+  specifies the +/- distance in the XY axes that the print can be randomly
+  relocated (assuming the bed has sufficient space). This can help reduce bed
+  wear from repeatedly printing in the same spot. Note that this feature
+  requires additional information to determine the proper bounds of the
+  relocated print. As such, `START_PRINT` must have valid `MESH_MIN`/`MESH_MAX`
+  parameters, and either `MODEL_MIN`/`MODEL_MAX` must be set or the print file
+  must include `EXCLUDE_OBJECT_DEFINE` statements with `POLYGON` lists that
+  define the bounds of the objects ([see `exclude_object` for more information](
+  https://www.klipper3d.org/Exclude_Object.html)).
+
+* `variable_start_random_placement_padding` *(default: 10.0)* - The minimum
+  distance the relocated print will be placed from the printable edge of the
+  bed.
+
+* `variable_start_try_saved_surface_mesh` *(default: False)* - If enabled and
+  `bed_mesh.profiles` contains a matching mesh for the currently select bed
+  surface, then the mesh will be loaded from the saved profile (and
+  [`BED_MESH_CALIBRATE_FAST`](#bed-mesh-improvements) will be skipped if
+  it would have been run otherwise).
 
 * `variable_start_z_tilt_adjust_at_temp`  *(default: True if `z_tilt`
   configured)* - If true the `PRINT_START` macro will run `Z_TILT_ADJUST` after
@@ -917,11 +1006,102 @@ gcode:
   dockable probe you may choose to wrap `BED_MESH_CALIBRATE` with the
   appropriate docking/undocking commands.
 
+#### `PRINT_START` Phases
+
+The recommended slicer start gcode breaks `PRINT_START` into the phases below.
+This approach allows for pausing or cancelling, and inserting custom gcode
+between the phases (e.g. to set status LEDs, deploy/dock probes, load filament).
+The phases are described in order below:
+
+* `_PRINT_START_PHASE_INIT` - Initializes the `PRINT_START` settings, and begins
+  heating the bed and chamber.
+* `_PRINT_START_PHASE_PREHEAT` - Stabilizes the bed and (if applicable) chamber
+  at the target temperatures. Also homes the axes while heating is in progress.
+* `_PRINT_START_PHASE_PROBING` - Performs probing operations, including mesh
+  bed calibration, quad gantry leveling, etc.
+* `_PRINT_START_PHASE_EXTRUDER` - Stabilizes the extruder at the target
+  temperature.
+* `_PRINT_START_PHASE_PURGE` - Extrudes a purge line in front of the print area.
+
 #### `PRINT_END`
 
 Parks the printhead, shuts down heaters, fans, etc, and performs general state
 housekeeping at the end of the print (called from the slicer's print end
 g-code).
+
+### Print Status Events
+
+> **Note:** This is a brand new feature that will likely evolve in the near
+> future. Statuses will probably be added and/or removed as I get a better sense
+> of how they're being used. _**Keep that in mind as you integrate this into
+> your own setup.**_
+
+The following events are fired during during the printing process, and the
+`GCODE_ON_PRINT_STATUS` command associates custom gcode with these events. This
+custom gcode can be used to set LEDs, emit beeps, or perform any other
+operations you may want to run at a given status in the printing process.
+
+* `ready` - Printer is ready to receive a job
+* `filament_load` - Loading filament
+* `filament_unload` - Unloading filament
+* `bed_heating` - Waiting for the bed to reach target
+* `chamber_heating` - Waiting for the chamber to reach target
+* `homing` - Homing any axis
+* `leveling_gantry` - Performing quad gantry-leveling
+* `calibrating_z` - Performing z-tilt adjustment
+* `meshing` - Calibrating a bed mesh
+* `extruder_heating` - Waiting for the extruder to reach target
+* `purging` - Printing purge line
+* `printing` - Actively printing
+* `pausing` - Print is paused
+* `cancelling` - Print is being cancelled
+* `completing` - Print completing (does not fire on a cancelled print)
+
+#### `GCODE_ON_PRINT_STATUS`
+
+Associates a gcode command with a specific status and sets the parameters for
+when and how the status event fires.
+
+* `STATUS` - A comma seperated list of status events this command is associated
+  with. Passing the value `all` will associate the gcode with all statuses.
+* `COMMAND` - The text of the command.
+* `ARGS` *(default: `0`)* - Set to `1` to enable passing the following status
+  arguments to the macro: `TYPE`, `WHEN`, `LAST_STATUS`, and `NEXT_STATUS`.
+  This is useful if calling a custom macro that determines its behavior based
+  on the exact details of the state transition.
+* `FILTER_ENTER` - An optional list of statuses that, if provided, will prevent
+  the command from firing unless the last status matches a status in the list.
+* `FILTER_LEAVE` - An optional list of statuses that, if provided, will prevent
+  the command from firing unless the next status matches a status in the list.
+* `TYPE` *(default: `ENTER`)* - If set to `ENTER` the command is run when
+  entering the specified status. If set to `LEAVE` the command is run when
+  leaving the specified status. If set to `BOTH` the command is run when
+  entering and leaving. The `LEAVE` commands are processed first, followed by
+  the `ENTER` commands, all in the order they were originally set.
+* `WHEN` *(default: `PRINTING`)* - Set to `PRINTING` to fire the status event
+  only when printing, `IDLE` when not printing, and `ALWAYS` for both.
+
+#### Print Status Event Example
+
+Below is a simple example of how to set up a status event config. The calls to
+`GCODE_ON_PRINT_STATUS` are placed in the `gcode` of the
+`[gcode_macro _km_options]` config section, so that they will be run once at
+printer start. When the printer enters the `ready` state at startup the command
+will echo *` TYPE=LEAVE WHEN=IDLE LAST_STATUS=none NEXT_STATUS=ready`* to the
+console, and when it leaves the `ready` state to begin printing it will echo
+*`TYPE=ENTER WHEN=PRINTING LAST_STATUS=ready NEXT_STATUS=homing`*.
+
+```
+[gcode_macro _km_options]
+# Any options variables declared here
+gcode:
+  GCODE_ON_PRINT_STATUS STATUS=ready COMMAND="STATUS_TEST" ARGS=1 WHEN=ALWAYS TYPE=BOTH
+
+[gcode_macro status_test]
+variable_extruder: 0
+gcode:
+  M118 STATUS_TEST {rawparams}
+```
 
 ### Velocity
 
@@ -943,10 +1123,10 @@ related commands, such as accelleration, jerk, and linear advance.
 
 ### Bed Mesh
 
-`BED_MESH_CALIBRATE` and `G20`
+`BED_MESH_CALIBRATE` and `G29`
 
 Overrides the default `BED_MESH_CALIBRATE` to use `BED_MESH_CALIBRATE_FAST`
-instead, and adds the `G20` command.
+instead, and adds the `G29` command.
 
 ***Configuration:***
 
